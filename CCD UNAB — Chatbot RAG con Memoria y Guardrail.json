@@ -1,0 +1,898 @@
+{
+  "name": "CCD UNAB — Chatbot RAG con Memoria y Guardrail",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "Hola! Te doy la bienvenida al Centro de Competencias Digitales (CCD) de la UNAB. 🎓\n\nPara identificarte, por favor escribe tu ID de estudiante (solo números, ej. 1004523).\n\nMientras tanto, este es el menú disponible:\n\n• /tarifa o /precio - Conocer costos de los cursos\n• /preguntas - Dudas sobre Competencias Digitales\n• /estado - Conocer tu estado académico\n• /salir - Finalizar conversación",
+        "options": {
+          "inputPlaceholder": "Escribe tu ID de estudiante o un comando (/estado, /tarifa)...",
+          "subtitle": "Asistente Virtual UNAB  24/7.",
+          "title": "Centro de Competencias Digitales (CCD)"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        480
+      ],
+      "id": "3d1e6a8f-3ad9-44da-9068-1bfbeb317ad1",
+      "name": "When chat message received",
+      "webhookId": "0d81bbbf-e8bf-45aa-a399-aaf822c3417d"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json;\nlet text = \"\";\nlet telegramId = \"test_user\";\nlet firstName = \"Usuario\";\nlet lastName = \"\";\nlet chatId = \"test_chat\";\n\nconst message = msg.message || msg.edited_message;\nif (message) {\n  text = message.text || '';\n  telegramId = String(message.from.id);\n  firstName = message.from.first_name || '';\n  lastName = message.from.last_name || '';\n  chatId = String(message.chat.id);\n} else if (msg.chatInput) {\n  text = msg.chatInput;\n  telegramId = msg.sessionId || \"chat_test\";\n  chatId = msg.sessionId || \"chat_test\";\n} else if (msg.text) {\n  text = msg.text;\n}\n\nreturn [{ json: { telegramId, chatId, firstName, lastName, text: text.trim(), timestamp: new Date().toISOString() } }];"
+      },
+      "id": "c3b39843-f1d7-486f-a506-69b99cb1ce3e",
+      "name": "Extraer Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json;\nconst text = (msg.text || \"\").trim();\nconst textLower = text.toLowerCase();\n\n// 1. Guardrail (Filtro de palabras inapropiadas)\nconst badWords = [\"mierda\", \"puto\", \"puta\", \"pendejo\", \"pendeja\", \"maricon\", \"marica\", \"gonorrea\", \"malparido\", \"hp\", \"pirobo\"];\nlet violatesGuardrail = false;\nfor (const word of badWords) {\n  if (textLower.includes(word)) {\n    violatesGuardrail = true;\n    break;\n  }\n}\n\nlet tipo = 'menu';\nlet extraidoID = null;\n\nif (violatesGuardrail) {\n  tipo = 'guardrail';\n} else if (textLower.startsWith('/tarifa') || textLower.includes('tarifa') || textLower.includes('precio') || textLower.includes('costo') || textLower.includes('vale')) {\n  tipo = 'tarifa';\n} else if (textLower.startsWith('/salir') || textLower.includes('salir') || textLower.includes('adios')) {\n  tipo = 'salir';\n} else if (textLower.startsWith('/miscursos') || textLower.startsWith('/estado') || textLower.includes('estado academico') || textLower.includes('estado académico') || textLower.includes('mis cursos')) {\n  tipo = 'estado_academico';\n  const match = text.match(/\\d+/);\n  if (match) {\n    extraidoID = match[0];\n  }\n} else if (textLower.startsWith('/preguntas') || textLower.includes('preguntas generales') || textLower.includes('pregunta')) {\n  tipo = 'preguntas_generales';\n} else if (/^\\d+$/.test(text)) {\n  // El usuario escribió SOLO su número de ID -> lo tratamos como solicitud de estado académico\n  tipo = 'estado_academico';\n  extraidoID = text;\n} else {\n  if (text.length > 12) {\n    tipo = 'preguntas_generales';\n  } else {\n    tipo = 'menu';\n  }\n}\n\nreturn [{\n  json: {\n    ...msg,\n    tipo,\n    violatesGuardrail,\n    extraidoID,\n    preguntaOriginal: text\n  }\n}];"
+      },
+      "id": "378057f2-8039-4e6c-bc5c-4f168bcdef46",
+      "name": "Guardrail e Intent Classifier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-guardrail",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "guardrail",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "guardrail"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-tarifa",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "tarifa",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "tarifa"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-salir",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "salir",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "salir"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-menu",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "menu",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "menu"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-estado",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "estado_academico",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "estado_academico"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "sw-preguntas",
+                    "leftValue": "={{ $json.tipo }}",
+                    "rightValue": "preguntas_generales",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "preguntas_generales"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "86825617-4b5f-4f0c-83ee-fd7d7d60fa4a",
+      "name": "Switch por Tipo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        672,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Guardrail e Intent Classifier').first().json;\nreturn [{\n  json: {\n    telegramId: originalData.telegramId,\n    chatId: originalData.chatId,\n    pregunta: originalData.preguntaOriginal,\n    respuesta: \"⚠️ Por favor, utiliza un lenguaje respetuoso.\\\\n\\\\nTe redirijo al menú principal:\\\\n\\\\n• /tarifa o /precio\\\\n• /preguntas (Dudas sobre Competencias Digitales)\\\\n• /estado (Conocer tu estado académico)\\\\n• /salir\",\n    tipo: \"guardrail\"\n  }\n}];"
+      },
+      "id": "c69cdecd-4099-426c-bcfb-5f0f6f7156bd",
+      "name": "Respuesta Guardrail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Guardrail e Intent Classifier').first().json;\nreturn [{\n  json: {\n    telegramId: originalData.telegramId,\n    chatId: originalData.chatId,\n    pregunta: originalData.preguntaOriginal,\n    respuesta: `La tarifa para el año 2026 de cualquier curso de competencias digitales es de *$520,550 COP*.\n\n¡Muchas gracias por tu interés! 😊\n\nEscribe cualquier otra duda o /salir para finalizar.`,\n    tipo: \"tarifa\"\n  }\n}];"
+      },
+      "id": "04be57dc-e8b2-4ed8-93b0-1a36e6a7ca71",
+      "name": "Respuesta Tarifa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Guardrail e Intent Classifier').first().json;\nreturn [{\n  json: {\n    telegramId: originalData.telegramId,\n    chatId: originalData.chatId,\n    pregunta: originalData.preguntaOriginal,\n    respuesta: \"Gracias por comunicarte con el Centro de Competencias Digitales UNAB. ¡Hasta pronto! 👋\",\n    tipo: \"salir\"\n  }\n}];"
+      },
+      "id": "b87b1297-6d0f-4331-a968-d4511984fbff",
+      "name": "Respuesta Salir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Guardrail e Intent Classifier').first().json;\nreturn [{\n  json: {\n    telegramId: originalData.telegramId,\n    chatId: originalData.chatId,\n    pregunta: originalData.preguntaOriginal,\n    respuesta: \"¡Hola! Te doy la bienvenida al Chatbot del Centro de Competencias Digitales (CCD) de la UNAB. 🎓\\\\n\\\\nPor favor, selecciona o escribe una de las opciones:\\\\n\\\\n• /tarifa o /precio - Conocer costos de los cursos\\\\n• /preguntas - Resolver dudas sobre los programas\\\\n• /estado - Conocer tu estado académico\\\\n• /salir - Finalizar conversación\",\n    tipo: \"menu\"\n  }\n}];"
+      },
+      "id": "3efcd799-f336-4258-87bd-857e9e8baeff",
+      "name": "Respuesta Menú",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id_estudiante, nombre, apellido, email\nFROM ccd.estudiantes\nWHERE id_estudiante = '{{ $('Guardrail e Intent Classifier').item.json.extraidoID.replace(/'/g, \"''\") }}'",
+        "options": {}
+      },
+      "id": "07776e30-c618-4acb-9979-6da9cc86e834",
+      "name": "Buscar Estudiante",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        896,
+        896
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "7MWqwUKpZW1LTyoV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Guardrail e Intent Classifier').first().json;\nconst idIntentado = originalData.extraidoID;\n\nconst respuesta = idIntentado\n  ? `No encontramos un estudiante con el ID ${idIntentado}. Verifica el número e inténtalo de nuevo.`\n  : `Para consultar tu estado académico, escribe tu número de ID de estudiante (solo dígitos, ej: 1004523).`;\n\nreturn [{ json: { telegramId: originalData.telegramId, chatId: originalData.chatId, pregunta: originalData.preguntaOriginal, respuesta, tipo: \"solicitar_id\" } }];"
+      },
+      "id": "e2bb8a8d-eddc-4106-90f7-a4d4c6d1f5a3",
+      "name": "Solicitar ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ccd.conversaciones (telegram_id, id_estudiante, pregunta, respuesta, tipo)\nVALUES (\n  '{{ $json.telegramId }}',\n  {{ $json.idEstudiante ? \"'\" + $json.idEstudiante + \"'\" : \"NULL\" }},\n  '{{ ($json.pregunta || \"\").replace(/'/g, \"''\") }}',\n  '{{ ($json.respuesta || \"\").replace(/'/g, \"''\") }}',\n  '{{ $json.tipo }}'\n)\nRETURNING id;",
+        "options": {}
+      },
+      "id": "a7c9dd2e-362e-4e9a-a9a3-56687216b41b",
+      "name": "Guardar Conversación",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2256,
+        576
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7MWqwUKpZW1LTyoV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://biing26.duckdns.org:9000/mcp",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.4,
+      "position": [
+        1840,
+        1152
+      ],
+      "id": "cbf7bb7f-7342-4f33-8158-fcd3f2f9cf09",
+      "name": "MCP Client"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o",
+          "cachedResultUrl": ""
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1584,
+        1152
+      ],
+      "id": "eaa0f87d-53bf-4541-8f3c-428f36acc320",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1648,
+        1872
+      ],
+      "id": "c93082e1-7616-4d1f-a481-c75538f7185e",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-est-encontrado",
+              "leftValue": "={{ $json.id_estudiante }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5ced02a2-8df6-4894-b301-d4f6d6a92316",
+      "name": "¿Estudiante Identificado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Guardrail e Intent Classifier').first().json;\nconst est = $input.first().json;\n\nconst contextoEstudiante = `ID: ${est.id_estudiante}\\nNombre: ${est.nombre} ${est.apellido}\\nPrograma: ${est.programa || 'N/D'}\\nSemestre actual: ${est.semestre_actual || 'N/D'}`;\n\nconst reglas = `REGLAS:\n- Responde siempre en español, tono cálido, claro y breve.\n- Para conocer los cursos del estudiante (tomados y pendientes), SIEMPRE debes llamar a la herramienta MCP \"obtener_progreso_estudiante\" usando el ID: ${est.id_estudiante}. No inventes cursos ni notas.\n- Organiza la respuesta por pilar: Básico, Analítica y Contenido Digital, Tecnologías Transformativas.\n- No respondas temas ajenos al estado académico del estudiante.`;\n\nreturn [{ json: { telegramId: original.telegramId, chatId: original.chatId, pregunta: original.preguntaOriginal, contextoEstudiante, reglas, idEstudiante: est.id_estudiante } }];"
+      },
+      "id": "9ef34657-4e8e-4faf-bac7-b5cf2e0f5b58",
+      "name": "Preparar Contexto Estado Académico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.reglas }}\n\nDATOS DEL ESTUDIANTE:\n{{ $json.contextoEstudiante }}\n\nPREGUNTA DEL ESTUDIANTE:\n{{ $json.pregunta }}",
+        "options": {
+          "systemMessage": "Eres CCDBOT, el asistente del Centro de Competencias Digitales (CCD) de la UNAB.\n\nLa ruta tiene 3 pilares, y el estudiante debe completar 1 curso de cada uno:\n- Pilar Básico (obligatorio): CD-101\n- Pilar Analítica y Contenido Digital (elige 1): CD-201, CD-202, CD-203\n- Pilar Tecnologías Transformativas (elige 1): CD-301, CD-302, CD-303\n\nSIEMPRE, para responder sobre el estado académico, debes llamar primero a la herramienta MCP \"obtener_progreso_estudiante\" con el ID de estudiante que recibes en el contexto. Nunca respondas sin haber consultado la herramienta primero, y nunca inventes cursos, notas o estados.\n\nAl responder:\n1. Organiza por pilar (Básico, Analítica, Transformativo).\n2. Indica el estado de cada curso (aprobado / en curso / reprobado / pendiente) y la nota si existe.\n3. Si un pilar completo está pendiente, dilo explícitamente.\n4. Responde siempre en español, tono cálido y breve."
+        }
+      },
+      "id": "9588c2bc-50db-4064-b8d5-90758fb64bea",
+      "name": "Agente Estado Académico",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1632,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Guardrail e Intent Classifier').first().json;\nconst contexto = $('Preparar Contexto Estado Académico').first().json;\nconst out = $input.first().json;\nconst respuesta = out.output || out.text || 'No pude generar una respuesta, inténtalo de nuevo.';\nreturn [{ json: { telegramId: original.telegramId, chatId: original.chatId, pregunta: original.preguntaOriginal, respuesta, tipo: 'estado_academico', idEstudiante: contexto.idEstudiante } }];"
+      },
+      "id": "f0ccc29d-c2e7-49b0-a971-ed5961a05eeb",
+      "name": "Formatear Respuesta Estado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.preguntaOriginal }}",
+        "options": {
+          "systemMessage": "Eres CCDBOT, el asistente del Centro de Competencias Digitales (CCD) de la UNAB. Responde SOLO preguntas generales sobre Competencias Digitales (cursos, insignias, requisitos, metodología, rutas de aprendizaje, etc.) apoyándote EXCLUSIVAMENTE en la herramienta de búsqueda de documentos disponible. Si la información no aparece en los documentos, dilo honestamente y sugiere contactar al CCD. Nunca hables de notas ni estado académico individual en esta rama. Responde siempre en español, de forma clara y concisa."
+        }
+      },
+      "id": "15a41eeb-69cf-43c2-b674-f2299f4f9190",
+      "name": "Agente RAG CCD",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1328,
+        1264
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Guardrail e Intent Classifier').first().json;\nconst out = $input.first().json;\nconst respuesta = out.output || out.text || 'No pude generar una respuesta, inténtalo de nuevo.';\nreturn [{ json: { telegramId: original.telegramId, chatId: original.chatId, pregunta: original.preguntaOriginal, respuesta, tipo: 'preguntas_generales' } }];"
+      },
+      "id": "13b3a4bb-83a0-4393-858e-f0f46ce51cd0",
+      "name": "Formatear Respuesta RAG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        1520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "buscar_competencias_digitales",
+        "toolDescription": "Busca información en la base de conocimiento del Centro de Competencias Digitales (CCD) UNAB: cursos, insignias, requisitos, metodología y rutas de aprendizaje.",
+        "tableName": "ccd.documentos_vectoriales",
+        "options": {
+          "columnNames": {
+            "values": {
+              "contentColumnName": "content"
+            }
+          }
+        }
+      },
+      "id": "3a837b5c-9bba-4539-82d3-a4cb0edb6071",
+      "name": "RAG Competencias Digitales",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        1632
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7MWqwUKpZW1LTyoV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Guardrail e Intent Classifier').item.json.chatId }}",
+        "tableName": "ccd_chat_memory"
+      },
+      "id": "9ce54c7e-2784-4012-a832-0c0776ca8e39",
+      "name": "Memoria de Conversación (Postgres)",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1712,
+        1152
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7MWqwUKpZW1LTyoV",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## ✅ Cambios aplicados\n\n1. Mensaje inicial ahora pide el ID de estudiante y muestra el menú juntos (nodo 'When chat message received').\n2. 'Switch por Tipo' ahora enruta por el campo `tipo` calculado en 'Guardrail e Intent Classifier' (guardrail, tarifa, salir, menu, identificacion_id, estado_academico, preguntas_generales).\n3. Rama ESTADO ACADÉMICO: Buscar Estudiante (SQL) → Agente Estado Académico (AI Agent + OpenAI Chat Model + MCP Client como tool). Las REGLAS van en el prompt de usuario, no en el system message.\n4. Rama PREGUNTAS GENERALES: Agente RAG CCD usa Únicamente la herramienta 'RAG Competencias Digitales' (Postgres PGVector en modo retrieve-as-tool) sobre `ccd.documentos_vectoriales`.\n\n### Pendiente de tu parte\n- Configura la credencial del nodo 'MCP Client' (URL del servidor MCP de notas).\n- Revisa que `ccd.estudiantes` tenga columna `telegram_id` (se usa para vincular el ID).\n- El nodo de memoria crea/usa la tabla `ccd_chat_memory` en Postgres.\n- Verifica el modelo del 'OpenAI Chat Model' (gpt-5-mini) según tu acceso.",
+        "height": 480,
+        "width": 560,
+        "color": 4
+      },
+      "id": "e2934000-e8cf-4997-9c53-3a2f0c60cad3",
+      "name": "Notas de Cambios",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Este nodo recupera la respuesta generada por cualquiera de los caminos que se haya ejecutado\nlet respuesta = \"Lo siento, ocurrió un error al procesar tu solicitud.\";\n\nconst nodosRespuesta = [\n  'Respuesta Guardrail',\n  'Respuesta Tarifa',\n  'Respuesta Salir',\n  'Respuesta Menú',\n  'Solicitar ID',\n  'Formatear Respuesta Estado',\n  'Formatear Respuesta RAG'\n];\n\nfor (const nombreNodo of nodosRespuesta) {\n  try {\n    const datosNodo = $(nombreNodo).item;\n    if (datosNodo && datosNodo.json && datosNodo.json.respuesta) {\n      respuesta = datosNodo.json.respuesta;\n      break; // Detiene la búsqueda cuando encuentra el nodo que sí se ejecutó\n    }\n  } catch (error) {\n    // Ignora los errores de los nodos que no se ejecutaron en esta sesión\n  }\n}\n\n// Retorna la respuesta en la propiedad 'output' que requiere el nodo de chat\nreturn [{ json: { output: respuesta } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        576
+      ],
+      "id": "ee76371b-99bf-42c2-bc0a-7a3eb1005c96",
+      "name": "Respuesta para el chat"
+    }
+  ],
+  "pinData": {
+    "When chat message received": [
+      {
+        "json": {
+          "action": "sendMessage",
+          "sessionId": "3cc49784-f92d-4617-b9b4-6c1f6f02ed4b",
+          "chatInput": "hola"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Extraer Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Guardrail e Intent Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrail e Intent Classifier": {
+      "main": [
+        [
+          {
+            "node": "Switch por Tipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respuesta Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respuesta Tarifa": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respuesta Salir": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respuesta Menú": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Estudiante": {
+      "main": [
+        [
+          {
+            "node": "¿Estudiante Identificado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Solicitar ID": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch por Tipo": {
+      "main": [
+        [
+          {
+            "node": "Respuesta Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Tarifa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Salir",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Menú",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buscar Estudiante",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agente RAG CCD",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Menú",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Estado Académico",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Estudiante Identificado?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Contexto Estado Académico",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Solicitar ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Contexto Estado Académico": {
+      "main": [
+        [
+          {
+            "node": "Agente Estado Académico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente Estado Académico": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta Estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta Estado": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente RAG CCD": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta RAG": {
+      "main": [
+        [
+          {
+            "node": "Guardar Conversación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente Estado Académico",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Agente RAG CCD",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Competencias Digitales": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente RAG CCD",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "RAG Competencias Digitales",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memoria de Conversación (Postgres)": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agente Estado Académico",
+            "type": "ai_memory",
+            "index": 0
+          },
+          {
+            "node": "Agente RAG CCD",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Conversación": {
+      "main": [
+        [
+          {
+            "node": "Respuesta para el chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3699b616-8c13-4e07-94d2-9d04860a6435",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ee9a94a04d98f891d3f9ac21a9a39e2419fb3c5f9e83001464cb663b4d7867d8"
+  },
+  "nodeGroups": [],
+  "id": "J0o7OQwTJqqgSLfI",
+  "tags": []
+}
